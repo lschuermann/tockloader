@@ -284,6 +284,15 @@ class BoardInterface:
                 "device": "nrf52",
             },
         },
+        "imxrt1060-evk": {
+            "description": "i.MX RT1060 evaluation kit, featuring the MIMXRT1062 Microcontroller",
+            "arch": "cortex-m7",
+            "page_size": 4096,
+            "no_attribute_table": True,
+            "jlink": {
+                "device": "MIMXRT1062xxx6A",
+            },
+        },
     }
 
     def __init__(self, args):
