@@ -13,6 +13,7 @@ import os
 import platform
 import socket
 import struct
+import subprocess
 import sys
 import time
 import threading
@@ -235,29 +236,41 @@ class BootloaderSerial(BoardInterface):
             jlink_cdc_ports = [p for p in ports if "J-Link - CDC" in p.description]
             if len(jlink_cdc_ports) == 2:
                 # It looks like the user has the nRF52840dk connected.
-                try:
-                    import pynrfjprog
-                    from pynrfjprog import LowLevel
 
-                    api = pynrfjprog.LowLevel.API()
-                    if not api.is_open():
-                        api.open()
+                # First try nrfutil
+                vcom0_path = self._discover_vcom_nrfutil()
 
-                    vcom0_path = None
-                    jtag_emulators = api.enum_emu_con_info()
-                    for jtag_emulator in jtag_emulators:
-                        jtag_emulator_ports = api.enum_emu_com_ports(
-                            jtag_emulator.serial_number
-                        )
-                        for jtag_emulator_port in jtag_emulator_ports:
-                            # We want to see VCOM == 0
-                            if jtag_emulator_port.vcom == 0:
-                                vcom0_path = jtag_emulator_port.path
-                                break
-                        # Only support one connected nRF52840dk for now.
-                        break
+                # Fallback to pynrfjprog if nrfutil didn't work
+                if vcom0_path is None:
+                    try:
+                        import pynrfjprog
+                        from pynrfjprog import LowLevel
 
-                    if vcom0_path != None:
+                        api = pynrfjprog.LowLevel.API()
+                        if not api.is_open():
+                            api.open()
+
+                        jtag_emulators = api.enum_emu_con_info()
+                        for jtag_emulator in jtag_emulators:
+                            jtag_emulator_ports = api.enum_emu_com_ports(
+                                jtag_emulator.serial_number
+                            )
+                            for jtag_emulator_port in jtag_emulator_ports:
+                                # We want to see VCOM == 0
+                                if jtag_emulator_port.vcom == 0:
+                                    vcom0_path = jtag_emulator_port.path
+                                    break
+                            # Only support one connected nRF52840dk for now.
+                            break
+
+                        # Must close this to end the underlying pynrfjprog process.
+                        api.close()
+                    except:
+                        # Any error with nrfjprog we just don't use this
+                        # optimization.
+                        pass
+
+                if vcom0_path != None:
                         # On mac, the nrfjprog tool uses the /dev/tty* paths,
                         # and we need the /dev/cu* paths. We just hack in a
                         # substitution here which will only have an effect on
@@ -275,14 +288,6 @@ class BootloaderSerial(BoardInterface):
                                 vcom0_path_standarized
                             )
                         )
-
-                    # Must close this to end the underlying pynrfjprog process.
-                    # Otherwise on my machine it sits at 100% CPU.
-                    api.close()
-                except:
-                    # Any error with nrfjprog we just don't use this
-                    # optimization.
-                    pass
 
             # Attempt to find other known boards based on their serial port
             # characteristics
@@ -346,6 +351,52 @@ class BootloaderSerial(BoardInterface):
 
         # Return serial port device name
         return port.device
+
+    def _discover_vcom_nrfutil(self):
+        """
+        Use nrfutil to find VCOM ports.
+        Returns the path to VCOM0 if found, else None.
+        """
+        try:
+            # We use check_output to get the JSON output from nrfutil.
+            # We suppress stderr to avoid polluting the console if nrfutil is not installed
+            # or errors out.
+            output = subprocess.check_output(
+                ["nrfutil", "device", "list", "--json"], stderr=subprocess.DEVNULL
+            )
+            data = json.loads(output)
+
+            # nrfutil output might vary. We try to be robust.
+            # Expected structure based on documentation hints:
+            # List of devices, each having 'ports' which is a list.
+
+            # Handle list or dict wrapper
+            devices = data if isinstance(data, list) else data.get("devices", [])
+            if not isinstance(devices, list):
+                # Try to find a list in values if it's a dict
+                if isinstance(data, dict):
+                    for key in data:
+                        if isinstance(data[key], list):
+                            devices = data[key]
+                            break
+
+            for device in devices:
+                # Check for ports
+                ports = device.get("ports", [])
+                for port in ports:
+                    # Check if vcom is 0.
+                    # Port object might be dict.
+                    if isinstance(port, dict):
+                        if port.get("vcom") == 0:
+                            # Prefer 'path' but fallback to other keys if needed
+                            return port.get("path") or port.get("device")
+
+            return None
+        except Exception as e:
+            # If nrfutil is not installed or fails, just return None so we can
+            # fallback to other methods.
+            logging.debug(f"nrfutil VCOM discovery failed: {e}")
+            return None
 
     def _configure_serial_port(self, port):
         """

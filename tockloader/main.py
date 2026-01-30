@@ -858,6 +858,9 @@ def main():
         "--jlink", action="store_true", help="Use JLinkExe to flash."
     )
     parent_channel.add_argument(
+        "--nrfutil", action="store_true", help="Use nrfutil to flash."
+    )
+    parent_channel.add_argument(
         "--openocd", action="store_true", help="Use OpenOCD to flash."
     )
     parent_channel.add_argument(
